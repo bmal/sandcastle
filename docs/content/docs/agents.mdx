@@ -13,16 +13,39 @@ An agent provider defines how Sandcastle interacts with a specific AI coding too
 
 ## Built-in Providers
 
-### Claude Code
+### Codex
 
-The default agent provider. Uses Claude Code as the AI coding agent inside the sandbox.
+The default agent provider. Uses Codex as the AI coding agent inside the sandbox.
+New Codex scaffolds default to `codex("gpt-5.5", { effort: "high" })`.
+
+For Docker and Podman scaffolds, `sandcastle init` creates a project-local Codex home at `.sandcastle/codex-home/`, sets `CODEX_HOME=/home/agent/.codex`, and mounts it to `/home/agent/.codex`. Log in once per project:
+
+```bash
+CODEX_HOME="$PWD/.sandcastle/codex-home" codex login
+```
 
 Required environment variables:
 
-| Variable | Description |
-| --- | --- |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `GH_TOKEN` | GitHub personal access token |
+| Variable   | Description                                                                |
+| ---------- | -------------------------------------------------------------------------- |
+| `GH_TOKEN` | GitHub personal access token, when using the GitHub Issues backlog manager |
+
+Optional environment variables:
+
+| Variable         | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `OPENAI_API_KEY` | API-key fallback for CI or non-subscription use |
+
+### Claude Code
+
+Uses Claude Code as the AI coding agent inside the sandbox.
+
+Required environment variables:
+
+| Variable            | Description                  |
+| ------------------- | ---------------------------- |
+| `ANTHROPIC_API_KEY` | Anthropic API key            |
+| `GH_TOKEN`          | GitHub personal access token |
 
 ### OpenCode
 
@@ -30,8 +53,8 @@ Uses OpenCode as the AI coding agent. OpenCode output is passed through as raw s
 
 Required environment variables:
 
-| Variable | Description |
-| --- | --- |
+| Variable   | Description                  |
+| ---------- | ---------------------------- |
 | `GH_TOKEN` | GitHub personal access token |
 
 ## Custom Providers

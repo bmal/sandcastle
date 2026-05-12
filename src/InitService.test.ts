@@ -14,6 +14,7 @@ import {
   getBacklogManager,
   listSandboxProviders,
   getSandboxProvider,
+  getDefaultSourceRepositoryUrl,
 } from "./InitService.js";
 import type { AgentEntry, ScaffoldOptions } from "./InitService.js";
 import { SANDBOX_REPO_DIR } from "./SandboxFactory.js";
@@ -43,6 +44,16 @@ const runScaffold = (repoDir: string, options?: Partial<ScaffoldOptions>) =>
 // ---------------------------------------------------------------------------
 
 describe("Agent registry", () => {
+  it("uses the bmal sandcastle repo as the default source", () => {
+    expect(getDefaultSourceRepositoryUrl()).toBe(
+      "https://github.com/bmal/sandcastle",
+    );
+  });
+
+  it("lists codex first as the default init choice", () => {
+    expect(listAgents()[0]?.name).toBe("codex");
+  });
+
   it("listAgents returns at least claude-code", () => {
     const agents = listAgents();
     expect(agents.some((a) => a.name === "claude-code")).toBe(true);
@@ -87,7 +98,7 @@ describe("Agent registry", () => {
     const agent = getAgent("codex");
     expect(agent).toBeDefined();
     expect(agent!.name).toBe("codex");
-    expect(agent!.defaultModel).toBe("gpt-5.4-mini");
+    expect(agent!.defaultModel).toBe("gpt-5.5");
     expect(agent!.factoryImport).toBe("codex");
     expect(agent!.dockerfileTemplate).toContain("FROM");
     expect(agent!.dockerfileTemplate).toContain("@openai/codex");
@@ -107,6 +118,19 @@ describe("Agent registry", () => {
     expect(agent!.dockerfileTemplate).toContain("FROM");
     expect(agent!.dockerfileTemplate).toContain("opencode-ai");
   });
+
+  it.each(listAgents())(
+    "$name Dockerfile handles host GIDs that already exist in the base image",
+    (agent) => {
+      expect(agent.dockerfileTemplate).toContain('getent group "$AGENT_GID"');
+      expect(agent.dockerfileTemplate).toContain(
+        'chown -R "$AGENT_UID:$AGENT_GID" /home/agent',
+      );
+      expect(agent.dockerfileTemplate).not.toContain(
+        "RUN groupmod -g $AGENT_GID node && usermod",
+      );
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -134,18 +158,18 @@ describe("InitService scaffold", () => {
     {
       agent: claudeCodeAgent,
       expectedKey: "ANTHROPIC_API_KEY=",
-      unexpectedKey: "OPENAI_KEY=",
+      unexpectedKey: "OPENAI_API_KEY=",
       expectIssue191Link: true,
     },
     {
       agent: piAgent,
       expectedKey: "ANTHROPIC_API_KEY=",
-      unexpectedKey: "OPENAI_KEY=",
+      unexpectedKey: "OPENAI_API_KEY=",
       expectIssue191Link: false,
     },
     {
       agent: codexAgent,
-      expectedKey: "OPENAI_KEY=",
+      expectedKey: "OPENAI_API_KEY=",
       unexpectedKey: "ANTHROPIC_API_KEY=",
       expectIssue191Link: false,
     },
@@ -209,6 +233,45 @@ describe("InitService scaffold", () => {
     await expect(
       access(join(dir, ".sandcastle", "config.json")),
     ).rejects.toThrow();
+  });
+
+  it("writes generated .sandcastle README with Codex subscription guidance", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.5" });
+
+    const readme = await readFile(
+      join(dir, ".sandcastle", "README.md"),
+      "utf-8",
+    );
+
+    expect(readme).toContain("https://github.com/bmal/sandcastle");
+    expect(readme).toContain(
+      'CODEX_HOME="$PWD/.sandcastle/codex-home" codex login',
+    );
+    expect(readme).toContain("npx tsx .sandcastle/main.mts");
+  });
+
+  it("creates AGENTS.md for OpenCode-friendly repo instructions when missing", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.5" });
+
+    const agents = await readFile(join(dir, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("https://github.com/bmal/sandcastle");
+    expect(agents).toContain("Keep Sandcastle orchestration in `.sandcastle/`");
+    expect(agents).toContain(
+      "Use Codex as the default Sandcastle agent provider",
+    );
+  });
+
+  it("does not overwrite existing AGENTS.md", async () => {
+    const dir = await makeDir();
+    await writeFile(join(dir, "AGENTS.md"), "# Existing\n", "utf-8");
+
+    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.5" });
+
+    await expect(readFile(join(dir, "AGENTS.md"), "utf-8")).resolves.toBe(
+      "# Existing\n",
+    );
   });
 
   it("errors if .sandcastle/ already exists", async () => {
@@ -564,6 +627,9 @@ describe("InitService scaffold", () => {
       const lines = getNextStepsLines("blank", "main.mts");
       expect(lines.length).toBeGreaterThanOrEqual(2);
       const joined = lines.join("\n");
+      expect(joined).toContain(
+        "npm install --save-dev @ai-hero/sandcastle tsx",
+      );
       expect(joined).toContain(".env");
       expect(joined).toContain("main.mts");
       expect(joined).not.toContain("npx sandcastle run");
@@ -572,6 +638,9 @@ describe("InitService scaffold", () => {
     it("non-blank template returns steps mentioning .env, package.json scripts, and npm run sandcastle", () => {
       const lines = getNextStepsLines("simple-loop", "main.mts");
       const joined = lines.join("\n");
+      expect(joined).toContain(
+        "npm install --save-dev @ai-hero/sandcastle tsx",
+      );
       expect(joined).toContain(".env");
       expect(joined).toContain("package.json");
       expect(joined).toContain("npm run sandcastle");
@@ -589,6 +658,14 @@ describe("InitService scaffold", () => {
       const joined = lines.join("\n");
       expect(joined).toContain("copyToWorktree");
       expect(joined).toContain("node_modules");
+    });
+
+    it("non-blank template mentions initial commit requirement", () => {
+      const lines = getNextStepsLines("simple-loop", "main.mts");
+      const joined = lines.join("\n");
+      expect(joined).toContain("no commits");
+      expect(joined).toContain("git add");
+      expect(joined).toContain("git commit");
     });
 
     it("blank template includes a step to customize prompt.md", () => {
@@ -654,6 +731,14 @@ describe("InitService scaffold", () => {
       const joined = lines.join("\n");
       expect(joined).not.toContain("CODING_STANDARDS.md");
     });
+
+    it("codex next steps print project-local login command", () => {
+      const lines = getNextStepsLines("blank", "main.mts", codexAgent);
+      const joined = lines.join("\n");
+      expect(joined).toContain(
+        'CODEX_HOME="$PWD/.sandcastle/codex-home" codex login',
+      );
+    });
   });
 
   it("scaffolds pi agent with pi Dockerfile", async () => {
@@ -683,7 +768,7 @@ describe("InitService scaffold", () => {
 
   it("scaffolds codex agent with codex Dockerfile", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.4-mini" });
+    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.5" });
 
     const dockerfile = await readFile(
       join(dir, ".sandcastle", "Dockerfile"),
@@ -696,14 +781,43 @@ describe("InitService scaffold", () => {
 
   it("scaffolds main.mts with codex factory import when codex agent selected", async () => {
     const dir = await makeDir();
-    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.4-mini" });
+    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.5" });
 
     const mainTs = await readFile(
       join(dir, ".sandcastle", "main.mts"),
       "utf-8",
     );
-    expect(mainTs).toContain('codex("gpt-5.4-mini")');
+    expect(mainTs).toContain('codex("gpt-5.5", { effort: "high" })');
     expect(mainTs).not.toContain("claudeCode");
+  });
+
+  it("creates project-local Codex home when codex agent is selected", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.5" });
+
+    const { access } = await import("node:fs/promises");
+    await expect(
+      access(join(dir, ".sandcastle", "codex-home")),
+    ).resolves.toBeUndefined();
+
+    const gitignore = await readFile(
+      join(dir, ".sandcastle", ".gitignore"),
+      "utf-8",
+    );
+    expect(gitignore).toContain("codex-home/");
+  });
+
+  it("mounts project-local Codex home in generated docker sandbox", async () => {
+    const dir = await makeDir();
+    await runScaffold(dir, { agent: codexAgent, model: "gpt-5.5" });
+
+    const mainTs = await readFile(
+      join(dir, ".sandcastle", "main.mts"),
+      "utf-8",
+    );
+    expect(mainTs).toContain('env: { CODEX_HOME: "/home/agent/.codex" }');
+    expect(mainTs).toContain('hostPath: ".sandcastle/codex-home"');
+    expect(mainTs).toContain('sandboxPath: "/home/agent/.codex"');
   });
 
   // --- createLabel option ---
@@ -1946,6 +2060,39 @@ describe("InitService scaffold", () => {
       await expect(
         access(join(dir, ".sandcastle", "Containerfile")),
       ).rejects.toThrow();
+    });
+
+    it("selecting podman rewrites generated main.mts to use podman", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, { sandboxProvider: podmanProvider });
+
+      const mainTs = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(mainTs).toContain('"@ai-hero/sandcastle/sandboxes/podman"');
+      expect(mainTs).toContain("sandbox: podman()");
+      expect(mainTs).not.toContain("sandboxes/docker");
+      expect(mainTs).not.toContain("sandbox: docker()");
+    });
+
+    it("selecting codex and podman mounts project-local Codex home", async () => {
+      const dir = await makeDir();
+      await runScaffold(dir, {
+        agent: codexAgent,
+        model: "gpt-5.5",
+        sandboxProvider: podmanProvider,
+      });
+
+      const mainTs = await readFile(
+        join(dir, ".sandcastle", "main.mts"),
+        "utf-8",
+      );
+      expect(mainTs).toContain('"@ai-hero/sandcastle/sandboxes/podman"');
+      expect(mainTs).toContain("sandbox: podman({");
+      expect(mainTs).toContain('env: { CODEX_HOME: "/home/agent/.codex" }');
+      expect(mainTs).toContain('hostPath: ".sandcastle/codex-home"');
+      expect(mainTs).toContain('sandboxPath: "/home/agent/.codex"');
     });
   });
 });

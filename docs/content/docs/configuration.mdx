@@ -18,17 +18,17 @@ The `config.json` file controls how Sandcastle operates:
 
 ```json
 {
-  "agent": "claude-code",
+  "agent": "codex",
   "maxIterations": 10
 }
 ```
 
 ### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `agent` | The agent provider to use | `"claude-code"` |
-| `maxIterations` | Maximum iterations per run | `10` |
+| Option          | Description                | Default   |
+| --------------- | -------------------------- | --------- |
+| `agent`         | The agent provider to use  | `"codex"` |
+| `maxIterations` | Maximum iterations per run | `10`      |
 
 ## Prompt
 
@@ -46,3 +46,13 @@ Sandcastle resolves environment variables from multiple sources in order:
 3. `process.env`
 
 Only keys declared in a `.env` file are resolved from `process.env`.
+
+## Codex Project Login
+
+For Docker and Podman scaffolds, Sandcastle keeps Codex subscription auth project-local. Run this once after `sandcastle init`:
+
+```bash
+CODEX_HOME="$PWD/.sandcastle/codex-home" codex login
+```
+
+The generated sandbox provider sets `CODEX_HOME=/home/agent/.codex` and mounts `.sandcastle/codex-home/` there. Isolated or cloud sandbox providers should use environment-based auth such as `OPENAI_API_KEY`.

@@ -52,6 +52,30 @@ const execGit = (
     });
   });
 
+const missingHeadMessage =
+  "Sandcastle needs at least one git commit before it can create a worktree. " +
+  "Create an initial commit first, for example:\n" +
+  "  git add .\n" +
+  '  git commit -m "Initial commit"';
+
+const repoHasNoHead = (message: string): boolean =>
+  message.includes("ambiguous argument 'HEAD'") ||
+  message.includes("invalid reference: HEAD") ||
+  message.includes("Needed a single revision") ||
+  message.includes("unknown revision or path not in the working tree");
+
+const ensureHeadExists = (
+  repoDir: string,
+): Effect.Effect<void, WorktreeError> =>
+  execGit(["rev-parse", "--verify", "HEAD"], repoDir).pipe(
+    Effect.asVoid,
+    Effect.catchAll((e) =>
+      repoHasNoHead(e.message)
+        ? Effect.fail(new WorktreeError({ message: missingHeadMessage }))
+        : Effect.fail(e),
+    ),
+  );
+
 /**
  * Generates a temporary branch name.
  * When name is provided: `sandcastle/<sanitized-name>/<YYYYMMDD-HHMMSS>`.
@@ -140,6 +164,8 @@ export const create = (
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    yield* ensureHeadExists(repoDir);
+
     const worktreesDir = join(repoDir, ".sandcastle", "worktrees");
     yield* fs
       .makeDirectory(worktreesDir, { recursive: true })

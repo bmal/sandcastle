@@ -137,6 +137,17 @@ describe("WorktreeManager.create", () => {
     expect(branch).toMatch(/^sandcastle\/\d{8}-\d{6}$/);
   });
 
+  it("fails clearly when the repo has no commits", async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), "wt-empty-repo-"));
+    await initRepo(repoDir);
+
+    const error = await runFail(create(repoDir));
+
+    expect(error.message).toContain("at least one git commit");
+    expect(error.message).toContain("git add");
+    expect(error.message).toContain("git commit");
+  });
+
   it("includes name in branch when name is specified", async () => {
     const repoDir = await setupRepo();
     const { branch } = await run(create(repoDir, { name: "my-run" }));

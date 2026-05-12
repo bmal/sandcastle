@@ -19,6 +19,7 @@ Sandcastle is provider-agnostic — it ships with built-in providers for Docker,
 ## Prerequisites
 
 - [Git](https://git-scm.com/)
+- [Codex CLI](https://www.npmjs.com/package/@openai/codex) on the host, for project-local subscription login
 - A sandbox provider — Sandcastle needs an isolated environment to run agents in. Built-in options:
   - [Docker Desktop](https://www.docker.com/) — most common for local development
   - [Podman](https://podman.io/) — rootless alternative to Docker
@@ -27,10 +28,10 @@ Sandcastle is provider-agnostic — it ships with built-in providers for Docker,
 
 ## Quick start
 
-1. Install the package:
+1. Install the package and `tsx` in your project:
 
 ```bash
-npm install --save-dev @ai-hero/sandcastle
+npm install --save-dev @ai-hero/sandcastle tsx
 ```
 
 2. Run `sandcastle init`. This scaffolds a `.sandcastle` directory with all the files needed.
@@ -39,26 +40,47 @@ npm install --save-dev @ai-hero/sandcastle
 npx sandcastle init
 ```
 
-3. Edit `.sandcastle/.env` and fill in your default values for `ANTHROPIC_API_KEY`. If you want to use your Claude subscription instead of an API key, see [#191](https://github.com/mattpocock/sandcastle/issues/191).
+3. Copy `.sandcastle/.env.example` to `.sandcastle/.env` and fill in any backlog-manager tokens such as `GH_TOKEN`.
 
 ```bash
 cp .sandcastle/.env.example .sandcastle/.env
 ```
 
-4. Run the `.sandcastle/main.ts` (or `main.mts`) file with `npx tsx`
+4. Log in to Codex for this project. Sandcastle mounts this project-local Codex home into Docker/Podman sandboxes, so your global `~/.codex` is not shared.
+
+```bash
+CODEX_HOME="$PWD/.sandcastle/codex-home" codex login
+```
+
+5. If this is a new repo with no commits yet, create an initial commit. Sandcastle's non-blank templates create git worktrees, which require `HEAD` to exist.
+
+```bash
+git add .
+git commit -m "Initial commit"
+```
+
+6. Run the `.sandcastle/main.ts` (or `main.mts`) file with `npx tsx`
 
 ```bash
 npx tsx .sandcastle/main.ts
 ```
 
 ```typescript
-// 3. Run the agent via the JS API
-import { run, claudeCode } from "@ai-hero/sandcastle";
+// Run the agent via the JS API
+import { run, codex } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 await run({
-  agent: claudeCode("claude-opus-4-7"),
-  sandbox: docker(), // or podman(), vercel(), or your own provider
+  agent: codex("gpt-5.5", { effort: "high" }),
+  sandbox: docker({
+    env: { CODEX_HOME: "/home/agent/.codex" },
+    mounts: [
+      {
+        hostPath: ".sandcastle/codex-home",
+        sandboxPath: "/home/agent/.codex",
+      },
+    ],
+  }),
   promptFile: ".sandcastle/prompt.md",
 });
 ```
@@ -77,6 +99,7 @@ Sandcastle uses a `SandboxProvider` to create isolated environments. The `sandbo
 Worktree methods (`wt.run()`, `wt.interactive()`, `wt.createSandbox()`) accept the same providers as their top-level counterparts. `wt.interactive()` defaults to `noSandbox()` when no sandbox is specified.
 
 ```typescript
+import { codex } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { vercel } from "@ai-hero/sandcastle/sandboxes/vercel";
@@ -84,14 +107,14 @@ import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 
 // Docker, Podman, and Vercel are interchangeable in run() and createSandbox():
 await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: codex("gpt-5.5", { effort: "high" }),
   sandbox: docker(),
   prompt: "...",
 });
 
 // No-sandbox runs the agent directly on the host — interactive() only:
 await interactive({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: codex("gpt-5.5", { effort: "high" }),
   sandbox: noSandbox(),
   prompt: "...", // optional — omit to launch the TUI with no initial prompt
   cwd: "/path/to/other-repo", // optional — defaults to process.cwd()
@@ -105,11 +128,11 @@ You can also [create your own provider](#custom-sandbox-providers) using `create
 Sandcastle exports a programmatic `run()` function for use in scripts, CI pipelines, or custom tooling. The examples below use `docker()`, but any `SandboxProvider` works in its place.
 
 ```typescript
-import { run, claudeCode } from "@ai-hero/sandcastle";
+import { run, codex } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const result = await run({
-  agent: claudeCode("claude-opus-4-7"),
+  agent: codex("gpt-5.5", { effort: "high" }),
   sandbox: docker(),
   promptFile: ".sandcastle/prompt.md",
 });
@@ -123,13 +146,13 @@ console.log(result.branch); // target branch name
 ### All options
 
 ```typescript
-import { run, claudeCode } from "@ai-hero/sandcastle";
+import { run, codex } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const result = await run({
-  // Agent provider — required. Pass a model string to claudeCode().
+  // Agent provider — required. Pass a model string to codex().
   // Optional second arg for provider-specific options like effort level.
-  agent: claudeCode("claude-opus-4-7", { effort: "high" }),
+  agent: codex("gpt-5.5", { effort: "high" }),
 
   // Sandbox provider — required. Any SandboxProvider works (docker, podman, vercel, or custom).
   // Provider-specific config (like imageName, mounts) lives inside the provider factory call.
@@ -650,21 +673,22 @@ Select a template during `sandcastle init` when prompted, or re-run init in a fr
 
 Scaffolds the `.sandcastle/` config directory and builds the container image. This is the first command you run in a new repo. You choose a sandbox provider (Docker or Podman) during init — selecting Podman writes a `Containerfile` instead of `Dockerfile` and uses `sandcastle podman build-image` for the build step.
 
-| Option         | Required | Default                      | Description                                                          |
-| -------------- | -------- | ---------------------------- | -------------------------------------------------------------------- |
-| `--image-name` | No       | `sandcastle:<repo-dir-name>` | Docker image name                                                    |
-| `--agent`      | No       | Interactive prompt           | Agent to use (`claude-code`, `pi`, `codex`, `opencode`)              |
-| `--model`      | No       | Agent's default model        | Model to use (e.g. `claude-sonnet-4-6`). Defaults to agent's default |
-| `--template`   | No       | Interactive prompt           | Template to scaffold (e.g. `blank`, `simple-loop`)                   |
+| Option         | Required | Default                      | Description                                                |
+| -------------- | -------- | ---------------------------- | ---------------------------------------------------------- |
+| `--image-name` | No       | `sandcastle:<repo-dir-name>` | Docker image name                                          |
+| `--agent`      | No       | Interactive prompt           | Agent to use (`codex`, `claude-code`, `pi`, `opencode`)    |
+| `--model`      | No       | Agent's default model        | Model to use (e.g. `gpt-5.5`). Defaults to agent's default |
+| `--template`   | No       | Interactive prompt           | Template to scaffold (e.g. `blank`, `simple-loop`)         |
 
 Creates the following files:
 
 ```
 .sandcastle/
 ├── Dockerfile      # Sandbox environment (customize as needed)
+├── codex-home/     # Project-local Codex auth/state (ignored)
 ├── prompt.md       # Agent instructions
 ├── .env.example    # Token placeholders
-└── .gitignore      # Ignores .env, logs/
+└── .gitignore      # Ignores .env, codex-home/, logs/
 ```
 
 Errors if `.sandcastle/` already exists to prevent overwriting customizations.
@@ -705,26 +729,26 @@ Removes the Podman image.
 
 ### `RunOptions`
 
-| Option               | Type               | Default                       | Description                                                                                                                                                     |
-| -------------------- | ------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`              | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-7")`, `pi("claude-sonnet-4-6")`, `codex("gpt-5.4-mini")`, `opencode("opencode/big-pickle")`)      |
-| `sandbox`            | SandboxProvider    | —                             | **Required.** Sandbox provider (e.g. `docker()`, `podman()`, `docker({ imageName: "sandcastle:local" })`)                                                       |
-| `cwd`                | string             | `process.cwd()`               | Host repo directory — anchor for `.sandcastle/` artifacts and git operations. Relative paths resolve against `process.cwd()`.                                   |
-| `prompt`             | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                                                                                            |
-| `promptFile`         | string             | —                             | Path to prompt file (mutually exclusive with `prompt`). Resolves against `process.cwd()`, **not** `cwd`.                                                        |
-| `maxIterations`      | number             | `1`                           | Maximum iterations to run                                                                                                                                       |
-| `hooks`              | SandboxHooks       | —                             | Lifecycle hooks (`host.*`, `sandbox.*`)                                                                                                                         |
-| `name`               | string             | —                             | Display name for the run, shown as a prefix in log output                                                                                                       |
-| `promptArgs`         | PromptArgs         | —                             | Key-value map for `{{KEY}}` placeholder substitution                                                                                                            |
-| `branchStrategy`     | BranchStrategy     | per-provider default          | Branch strategy: `{ type: 'head' }`, `{ type: 'merge-to-head' }`, or `{ type: 'branch', branch: '…' }`                                                          |
-| `copyToWorktree`     | string[]           | —                             | Host-relative file paths to copy into the sandbox before start (not supported with `branchStrategy: { type: 'head' }`)                                          |
-| `logging`            | object             | file (auto-generated)         | `{ type: 'file', path }` or `{ type: 'stdout' }`                                                                                                                |
-| `completionSignal`   | string \| string[] | `<promise>COMPLETE</promise>` | String or array of strings the agent emits to stop the iteration loop early                                                                                     |
-| `idleTimeoutSeconds` | number             | `600`                         | Idle timeout in seconds — resets on each agent output event                                                                                                     |
-| `resumeSession`      | string             | —                             | Resume a prior Claude Code session by ID. Incompatible with `maxIterations > 1`. Session file must exist on host.                                               |
-| `signal`             | AbortSignal        | —                             | Cancel the run when aborted. Kills the in-flight agent subprocess and cancels lifecycle hooks; the worktree is preserved on disk. Rejects with `signal.reason`. |
-| `timeouts`           | Timeouts           | —                             | Override default timeouts for built-in lifecycle steps. Currently supports `{ copyToWorktreeMs?: number }` (default: 60 000).                                   |
-| `output`             | OutputDefinition   | —                             | Structured output definition (`Output.object(…)` or `Output.string(…)`). Requires `maxIterations === 1`. See [Structured output](#structured-output).           |
+| Option               | Type               | Default                       | Description                                                                                                                                                               |
+| -------------------- | ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`              | AgentProvider      | —                             | **Required.** Agent provider (e.g. `claudeCode("claude-opus-4-6")`, `pi("claude-sonnet-4-6")`, `codex("gpt-5.5", { effort: "high" })`, `opencode("opencode/big-pickle")`) |
+| `sandbox`            | SandboxProvider    | —                             | **Required.** Sandbox provider (e.g. `docker()`, `podman()`, `docker({ imageName: "sandcastle:local" })`)                                                                 |
+| `cwd`                | string             | `process.cwd()`               | Host repo directory — anchor for `.sandcastle/` artifacts and git operations. Relative paths resolve against `process.cwd()`.                                             |
+| `prompt`             | string             | —                             | Inline prompt (mutually exclusive with `promptFile`)                                                                                                                      |
+| `promptFile`         | string             | —                             | Path to prompt file (mutually exclusive with `prompt`). Resolves against `process.cwd()`, **not** `cwd`.                                                                  |
+| `maxIterations`      | number             | `1`                           | Maximum iterations to run                                                                                                                                                 |
+| `hooks`              | SandboxHooks       | —                             | Lifecycle hooks (`host.*`, `sandbox.*`)                                                                                                                                   |
+| `name`               | string             | —                             | Display name for the run, shown as a prefix in log output                                                                                                                 |
+| `promptArgs`         | PromptArgs         | —                             | Key-value map for `{{KEY}}` placeholder substitution                                                                                                                      |
+| `branchStrategy`     | BranchStrategy     | per-provider default          | Branch strategy: `{ type: 'head' }`, `{ type: 'merge-to-head' }`, or `{ type: 'branch', branch: '…' }`                                                                    |
+| `copyToWorktree`     | string[]           | —                             | Host-relative file paths to copy into the sandbox before start (not supported with `branchStrategy: { type: 'head' }`)                                                    |
+| `logging`            | object             | file (auto-generated)         | `{ type: 'file', path }` or `{ type: 'stdout' }`                                                                                                                          |
+| `completionSignal`   | string \| string[] | `<promise>COMPLETE</promise>` | String or array of strings the agent emits to stop the iteration loop early                                                                                               |
+| `idleTimeoutSeconds` | number             | `600`                         | Idle timeout in seconds — resets on each agent output event                                                                                                               |
+| `resumeSession`      | string             | —                             | Resume a prior Claude Code session by ID. Incompatible with `maxIterations > 1`. Session file must exist on host.                                                         |
+| `signal`             | AbortSignal        | —                             | Cancel the run when aborted. Kills the in-flight agent subprocess and cancels lifecycle hooks; the worktree is preserved on disk. Rejects with `signal.reason`.           |
+| `timeouts`           | Timeouts           | —                             | Override default timeouts for built-in lifecycle steps. Currently supports `{ copyToWorktreeMs?: number }` (default: 60 000).                                             |
+| `output`             | OutputDefinition   | —                             | Structured output definition (`Output.object(…)` or `Output.string(…)`). Requires `maxIterations === 1`. See [Structured output](#structured-output).                     |
 
 ### `RunResult`
 
@@ -802,13 +826,21 @@ agent: claudeCode("claude-opus-4-7", { effort: "high" });
 The `codex()` factory accepts an optional second argument for provider-specific options:
 
 ```typescript
-agent: codex("gpt-5.4", { effort: "high" });
+agent: codex("gpt-5.5", { effort: "high" });
 ```
 
 | Option   | Type                                           | Default | Description                                               |
 | -------- | ---------------------------------------------- | ------- | --------------------------------------------------------- |
 | `effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Codex reasoning effort level via `model_reasoning_effort` |
 | `env`    | `Record<string, string>`                       | `{}`    | Environment variables injected by this agent provider     |
+
+For local Docker/Podman use, `sandcastle init` creates `.sandcastle/codex-home/`, sets `CODEX_HOME=/home/agent/.codex`, and mounts it to `/home/agent/.codex` in generated Codex scaffolds. Log in once per project:
+
+```bash
+CODEX_HOME="$PWD/.sandcastle/codex-home" codex login
+```
+
+This keeps subscription credentials scoped to the project. For CI or isolated/cloud sandbox providers, use environment-based auth such as `OPENAI_API_KEY` instead of the project-local Codex home mount.
 
 ### Provider `env`
 
@@ -1152,15 +1184,15 @@ The `.sandcastle/Dockerfile` controls the sandbox environment. The default templ
 - **Node.js 22** (base image)
 - **git**, **curl**, **jq** (system dependencies)
 - **GitHub CLI** (`gh`)
-- **Claude Code CLI**
-- A non-root `agent` user (required — Claude runs as this user)
+- **Codex CLI**
+- A non-root `agent` user (required — the agent runs as this user)
 
 When customizing the Dockerfile, ensure you keep:
 
-- A non-root user (the default `agent` user) for Claude to run as
+- A non-root user (the default `agent` user) for the agent to run as
 - `git` (required for commits and branch operations)
 - `gh` (required for issue fetching)
-- Claude Code CLI installed and on PATH
+- Codex CLI installed and on PATH
 
 Add your project-specific dependencies (e.g., language runtimes, build tools) to the Dockerfile as needed.
 

@@ -5,9 +5,17 @@ import { fileURLToPath } from "node:url";
 import { SANDBOX_REPO_DIR } from "./SandboxFactory.js";
 
 const GITIGNORE = `.env
+codex-home/
 logs/
 worktrees/
 `;
+
+const CODEX_PROJECT_HOME = "codex-home";
+const CODEX_PROJECT_HOME_HOST_PATH = `.sandcastle/${CODEX_PROJECT_HOME}`;
+const CODEX_PROJECT_HOME_SANDBOX_PATH = "/home/agent/.codex";
+const CODEX_DEFAULT_MODEL = "gpt-5.5";
+const CODEX_DEFAULT_EFFORT = "high";
+const DEFAULT_SOURCE_REPOSITORY_URL = "https://github.com/bmal/sandcastle";
 
 export interface TemplateMetadata {
   name: string;
@@ -56,6 +64,17 @@ export interface AgentEntry {
   readonly envExample: string;
 }
 
+const AGENT_USER_SETUP = `# Rename the base image's "node" user to "agent" and align UID/GID.
+# macOS commonly reports primary GID 20 ("staff"), which already exists in
+# Debian-based images. Reuse an existing numeric group when present.
+RUN if getent group "$AGENT_GID" >/dev/null; then \\
+  usermod -u "$AGENT_UID" -g "$AGENT_GID" -d /home/agent -m -l agent node; \\
+  else \\
+  groupmod -g "$AGENT_GID" node \\
+    && usermod -u "$AGENT_UID" -g "$AGENT_GID" -d /home/agent -m -l agent node; \\
+  fi \\
+  && chown -R "$AGENT_UID:$AGENT_GID" /home/agent`;
+
 const CLAUDE_CODE_DOCKERFILE = `FROM node:22-bookworm
 
 # Install system dependencies
@@ -73,8 +92,7 @@ RUN apt-get update && apt-get install -y \\
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -g $AGENT_GID node && usermod -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
+${AGENT_USER_SETUP}
 USER \${AGENT_UID}:\${AGENT_GID}
 
 # Install Claude Code CLI
@@ -108,8 +126,7 @@ RUN apt-get update && apt-get install -y \\
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -g $AGENT_GID node && usermod -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
+${AGENT_USER_SETUP}
 
 # Install pi coding agent (run as root before USER agent)
 RUN npm install -g @mariozechner/pi-coding-agent
@@ -141,8 +158,7 @@ RUN apt-get update && apt-get install -y \\
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -g $AGENT_GID node && usermod -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
+${AGENT_USER_SETUP}
 
 # Install Codex CLI (run as root before USER agent)
 RUN npm install -g @openai/codex
@@ -174,8 +190,7 @@ RUN apt-get update && apt-get install -y \\
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 
-# Rename the base image's "node" user to "agent" and align UID/GID.
-RUN groupmod -g $AGENT_GID node && usermod -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
+${AGENT_USER_SETUP}
 
 # Install OpenCode CLI (run as root before USER agent)
 RUN npm install -g opencode-ai@latest
@@ -192,13 +207,23 @@ ENTRYPOINT ["sleep", "infinity"]
 
 const AGENT_REGISTRY: AgentEntry[] = [
   {
+    name: "codex",
+    label: "Codex",
+    defaultModel: CODEX_DEFAULT_MODEL,
+    factoryImport: "codex",
+    dockerfileTemplate: CODEX_DOCKERFILE,
+    envExample: `# Optional OpenAI API key fallback for CI or non-subscription use.
+# Leave blank when using project-local Codex login.
+OPENAI_API_KEY=`,
+  },
+  {
     name: "claude-code",
     label: "Claude Code",
     defaultModel: "claude-opus-4-7",
     factoryImport: "claudeCode",
     dockerfileTemplate: CLAUDE_CODE_DOCKERFILE,
     envExample: `# Anthropic API key
-# If you want to use your Claude subscription instead of an API key, see https://github.com/mattpocock/sandcastle/issues/191
+# If you want to use your Claude subscription instead of an API key, see https://github.com/bmal/sandcastle/issues/191
 ANTHROPIC_API_KEY=`,
   },
   {
@@ -209,15 +234,6 @@ ANTHROPIC_API_KEY=`,
     dockerfileTemplate: PI_DOCKERFILE,
     envExample: `# Anthropic API key
 ANTHROPIC_API_KEY=`,
-  },
-  {
-    name: "codex",
-    label: "Codex",
-    defaultModel: "gpt-5.4-mini",
-    factoryImport: "codex",
-    dockerfileTemplate: CODEX_DOCKERFILE,
-    envExample: `# OpenAI API key
-OPENAI_KEY=`,
   },
   {
     name: "opencode",
@@ -308,6 +324,9 @@ export const getBacklogManager = (
 export const getAgent = (name: string): AgentEntry | undefined =>
   AGENT_REGISTRY.find((a) => a.name === name);
 
+export const getDefaultSourceRepositoryUrl = (): string =>
+  DEFAULT_SOURCE_REPOSITORY_URL;
+
 // ---------------------------------------------------------------------------
 // Sandbox provider registry (internal — not part of public API)
 // ---------------------------------------------------------------------------
@@ -351,28 +370,48 @@ export const getSandboxProvider = (
 export function getNextStepsLines(
   template: string,
   mainFilename: string,
+  agent?: AgentEntry,
 ): string[] {
   if (template === "blank") {
-    return [
+    const lines = [
       "Next steps:",
-      `1. Set the required env vars in .sandcastle/.env (see .sandcastle/.env.example)`,
-      "   If you want to use your Claude subscription instead of an API key, see https://github.com/mattpocock/sandcastle/issues/191",
-      "2. Read and customize .sandcastle/prompt.md to describe what you want the agent to do",
-      `3. Customize .sandcastle/${mainFilename} — it uses the JS API (\`run()\`) to control how the agent runs`,
-      `4. Add "sandcastle": "npx tsx .sandcastle/${mainFilename}" to your package.json scripts`,
-      "5. Run `npm run sandcastle` to start the agent",
+      `1. Install Sandcastle and tsx in this project: \`npm install --save-dev @ai-hero/sandcastle tsx\``,
+      `2. Set the required env vars in .sandcastle/.env (see .sandcastle/.env.example)`,
     ];
+    if (agent?.name === "codex") {
+      lines.push(
+        "3. Log in to Codex for this project:",
+        `   CODEX_HOME="$PWD/${CODEX_PROJECT_HOME_HOST_PATH}" codex login`,
+      );
+    }
+    const nextStep = agent?.name === "codex" ? 4 : 3;
+    lines.push(
+      `${nextStep}. Read and customize .sandcastle/prompt.md to describe what you want the agent to do`,
+      `${nextStep + 1}. Customize .sandcastle/${mainFilename} — it uses the JS API (\`run()\`) to control how the agent runs`,
+      `${nextStep + 2}. Add "sandcastle": "npx tsx .sandcastle/${mainFilename}" to your package.json scripts`,
+      `${nextStep + 3}. Run \`npm run sandcastle\` to start the agent`,
+    );
+    return lines;
   } else {
     const hasReviewer = template.includes("review");
     let step = 1;
     const lines: string[] = [
       "Next steps:",
+      `${step++}. Install Sandcastle and tsx in this project: \`npm install --save-dev @ai-hero/sandcastle tsx\``,
       `${step++}. Set the required env vars in .sandcastle/.env (see .sandcastle/.env.example)`,
-      "   If you want to use your Claude subscription instead of an API key, see https://github.com/mattpocock/sandcastle/issues/191",
+    ];
+    if (agent?.name === "codex") {
+      lines.push(
+        `${step++}. Log in to Codex for this project:`,
+        `   CODEX_HOME="$PWD/${CODEX_PROJECT_HOME_HOST_PATH}" codex login`,
+      );
+    }
+    lines.push(
       `${step++}. Add "sandcastle": "npx tsx .sandcastle/${mainFilename}" to your package.json scripts`,
+      `${step++}. If this repo has no commits yet, create an initial commit before running Sandcastle: \`git add . && git commit -m "Initial commit"\``,
       `${step++}. Templates use \`copyToWorktree: ["node_modules"]\` to copy your host node_modules into the sandbox for fast startup — the \`npm install\` in the onSandboxReady hook is a safety net for platform-specific binaries. Adjust both if you use a different package manager`,
       `${step++}. Read and customize the prompt files in .sandcastle/ — they shape what the agent does`,
-    ];
+    );
     if (hasReviewer) {
       lines.push(
         `${step++}. Customize .sandcastle/CODING_STANDARDS.md with your project's standards — the reviewer agent loads it during review`,
@@ -382,6 +421,64 @@ export function getNextStepsLines(
     return lines;
   }
 }
+
+const getGeneratedReadme = (
+  agent: AgentEntry,
+  mainFilename: string,
+): string => {
+  const codexSection =
+    agent.name === "codex"
+      ? `
+## Codex Subscription Login
+
+This scaffold prepares a project-local Codex home at \`${CODEX_PROJECT_HOME_HOST_PATH}\`.
+Log in once from the host before running Sandcastle:
+
+\`\`\`bash
+CODEX_HOME="$PWD/${CODEX_PROJECT_HOME_HOST_PATH}" codex login
+\`\`\`
+
+Sandcastle mounts that directory into Docker/Podman at \`${CODEX_PROJECT_HOME_SANDBOX_PATH}\`, so the agent can use your Codex subscription without sharing your global \`~/.codex\`.
+`
+      : "";
+
+  return `# Sandcastle Config
+
+This directory contains the Sandcastle config for this repo.
+
+## Defaults
+
+- Source repository: ${DEFAULT_SOURCE_REPOSITORY_URL}
+- Agent provider: ${agent.label}
+- Main file: .sandcastle/${mainFilename}
+
+${codexSection}## Run
+
+\`\`\`bash
+npx tsx .sandcastle/${mainFilename}
+\`\`\`
+
+Keep Sandcastle orchestration in \`.sandcastle/\`. Put repo-wide agent instructions in the root \`AGENTS.md\` so OpenCode and other coding agents can find them.
+`;
+};
+
+const getGeneratedAgentsMd = (): string => `# Agent Instructions
+
+This repo uses Sandcastle from ${DEFAULT_SOURCE_REPOSITORY_URL}.
+
+## Workflow
+
+- Keep Sandcastle orchestration in \`.sandcastle/\`.
+- Use Codex as the default Sandcastle agent provider.
+- Use project-local Codex auth state from \`.sandcastle/codex-home/\`; do not rely on global \`~/.codex\` inside sandboxes.
+- Run Sandcastle with \`npx tsx .sandcastle/main.ts\` or \`npx tsx .sandcastle/main.mts\`, depending on which file exists.
+
+## Quality
+
+- Make the smallest correct change.
+- Run the relevant checks before handing work back.
+- Do not commit generated secrets or auth state.
+`;
 
 // ---------------------------------------------------------------------------
 // Scaffolding helpers
@@ -456,6 +553,7 @@ const rewriteMainTs = (
   agent: AgentEntry,
   model: string,
   mainFilename: string,
+  sandboxProvider: SandboxProviderEntry,
 ): Effect.Effect<void, Error, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -485,10 +583,34 @@ const rewriteMainTs = (
       `${agent.factoryImport}\\(["']([^"']+)["']\\)`,
       "g",
     );
+    const factoryCallReplacement =
+      agent.name === "codex"
+        ? `${agent.factoryImport}("${model}", { effort: "${CODEX_DEFAULT_EFFORT}" })`
+        : `${agent.factoryImport}("${model}")`;
+    content = content.replace(factoryCallRe, factoryCallReplacement);
+
+    const sandboxFactory = sandboxProvider.name;
     content = content.replace(
-      factoryCallRe,
-      `${agent.factoryImport}("${model}")`,
+      /@ai-hero\/sandcastle\/sandboxes\/docker/g,
+      `@ai-hero/sandcastle/sandboxes/${sandboxFactory}`,
     );
+    content = content.replace(/\bdocker\b/g, sandboxFactory);
+
+    if (agent.name === "codex") {
+      const sandboxCall = `${sandboxFactory}({
+      env: { CODEX_HOME: "${CODEX_PROJECT_HOME_SANDBOX_PATH}" },
+      mounts: [
+        {
+          hostPath: "${CODEX_PROJECT_HOME_HOST_PATH}",
+          sandboxPath: "${CODEX_PROJECT_HOME_SANDBOX_PATH}",
+        },
+      ],
+    })`;
+      content = content.replace(
+        new RegExp(`\\b${sandboxFactory}\\(\\)`, "g"),
+        sandboxCall,
+      );
+    }
 
     yield* fs
       .writeFileString(mainTsPath, content)
@@ -588,6 +710,34 @@ const substituteTemplateArgs = (
       ),
       { concurrency: "unbounded" },
     );
+  });
+
+const writeGeneratedDocs = (
+  repoDir: string,
+  configDir: string,
+  agent: AgentEntry,
+  mainFilename: string,
+): Effect.Effect<void, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+
+    yield* fs
+      .writeFileString(
+        join(configDir, "README.md"),
+        getGeneratedReadme(agent, mainFilename),
+      )
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+
+    const agentsPath = join(repoDir, "AGENTS.md");
+    const agentsExists = yield* fs
+      .exists(agentsPath)
+      .pipe(Effect.mapError((e) => new Error(e.message)));
+
+    if (!agentsExists) {
+      yield* fs
+        .writeFileString(agentsPath, getGeneratedAgentsMd())
+        .pipe(Effect.mapError((e) => new Error(e.message)));
+    }
   });
 
 // ---------------------------------------------------------------------------
@@ -693,11 +843,27 @@ export const scaffold = (
       { concurrency: "unbounded" },
     );
 
+    if (agent.name === "codex") {
+      yield* fs
+        .makeDirectory(join(configDir, CODEX_PROJECT_HOME), {
+          recursive: true,
+        })
+        .pipe(Effect.mapError((e) => new Error(e.message)));
+    }
+
     // Rewrite main file with the selected agent factory and model
-    yield* rewriteMainTs(configDir, agent, model, mainFilename);
+    yield* rewriteMainTs(
+      configDir,
+      agent,
+      model,
+      mainFilename,
+      sandboxProvider,
+    );
 
     // Replace backlog manager template arguments in all text files (must run before label stripping)
     yield* substituteTemplateArgs(configDir, backlogManager);
+
+    yield* writeGeneratedDocs(repoDir, configDir, agent, mainFilename);
 
     // Strip --label Sandcastle from prompt files when the user declined label creation
     if (!createLabel) {
