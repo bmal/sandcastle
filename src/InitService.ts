@@ -16,6 +16,8 @@ const CODEX_PROJECT_HOME_SANDBOX_PATH = "/home/agent/.codex";
 const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_DEFAULT_EFFORT = "high";
 const DEFAULT_SOURCE_REPOSITORY_URL = "https://github.com/bmal/sandcastle";
+const SANDBOX_PACKAGE_NAME = "@ai-hero/sandcastle";
+const SANDBOX_INSTALL_SPEC = `${SANDBOX_PACKAGE_NAME}@github:bmal/sandcastle`;
 
 export interface TemplateMetadata {
   name: string;
@@ -375,7 +377,7 @@ export function getNextStepsLines(
   if (template === "blank") {
     const lines = [
       "Next steps:",
-      `1. Install Sandcastle and tsx in this project: \`npm install --save-dev @ai-hero/sandcastle tsx\``,
+      `1. Install the bmal Sandcastle fork and tsx in this project: \`npm install --save-dev ${SANDBOX_INSTALL_SPEC} tsx\``,
       `2. Set the required env vars in .sandcastle/.env (see .sandcastle/.env.example)`,
     ];
     if (agent?.name === "codex") {
@@ -397,7 +399,7 @@ export function getNextStepsLines(
     let step = 1;
     const lines: string[] = [
       "Next steps:",
-      `${step++}. Install Sandcastle and tsx in this project: \`npm install --save-dev @ai-hero/sandcastle tsx\``,
+      `${step++}. Install the bmal Sandcastle fork and tsx in this project: \`npm install --save-dev ${SANDBOX_INSTALL_SPEC} tsx\``,
       `${step++}. Set the required env vars in .sandcastle/.env (see .sandcastle/.env.example)`,
     ];
     if (agent?.name === "codex") {

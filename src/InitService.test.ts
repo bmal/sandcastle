@@ -628,7 +628,7 @@ describe("InitService scaffold", () => {
       expect(lines.length).toBeGreaterThanOrEqual(2);
       const joined = lines.join("\n");
       expect(joined).toContain(
-        "npm install --save-dev @ai-hero/sandcastle tsx",
+        "npm install --save-dev @ai-hero/sandcastle@github:bmal/sandcastle tsx",
       );
       expect(joined).toContain(".env");
       expect(joined).toContain("main.mts");
@@ -639,7 +639,7 @@ describe("InitService scaffold", () => {
       const lines = getNextStepsLines("simple-loop", "main.mts");
       const joined = lines.join("\n");
       expect(joined).toContain(
-        "npm install --save-dev @ai-hero/sandcastle tsx",
+        "npm install --save-dev @ai-hero/sandcastle@github:bmal/sandcastle tsx",
       );
       expect(joined).toContain(".env");
       expect(joined).toContain("package.json");

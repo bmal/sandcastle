@@ -28,11 +28,13 @@ Sandcastle is provider-agnostic — it ships with built-in providers for Docker,
 
 ## Quick start
 
-1. Install the package and `tsx` in your project:
+1. Install the bmal Sandcastle fork and `tsx` in your project:
 
 ```bash
-npm install --save-dev @ai-hero/sandcastle tsx
+npm install --save-dev @ai-hero/sandcastle@github:bmal/sandcastle tsx
 ```
+
+This installs the bmal fork under Sandcastle's existing package name. Do not install plain `@ai-hero/sandcastle`, because that resolves to the upstream npm package.
 
 2. Run `sandcastle init`. This scaffolds a `.sandcastle` directory with all the files needed.
 
