@@ -456,6 +456,14 @@ This directory contains the Sandcastle config for this repo.
 
 ${codexSection}## Run
 
+Build the sandbox image from this project directory first, and again after changing the Dockerfile:
+
+\`\`\`bash
+npx sandcastle docker build-image
+\`\`\`
+
+Then run Sandcastle with this config's main file:
+
 \`\`\`bash
 npx tsx .sandcastle/${mainFilename}
 \`\`\`

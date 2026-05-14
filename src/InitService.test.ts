@@ -248,6 +248,7 @@ describe("InitService scaffold", () => {
     expect(readme).toContain(
       'CODEX_HOME="$PWD/.sandcastle/codex-home" codex login',
     );
+    expect(readme).toContain("npx sandcastle docker build-image");
     expect(readme).toContain("npx tsx .sandcastle/main.mts");
   });
 
